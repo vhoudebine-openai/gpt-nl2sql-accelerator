@@ -151,6 +151,51 @@ ORDER BY "{column_name}"
 LIMIT 10"""
 }
 
+DATABRICKS_QUERIES = {
+    'list_database_tables': """SELECT concat_ws('.', table_schema, table_name) AS TABLE_NAME
+FROM information_schema.tables
+WHERE table_type = 'BASE TABLE'
+  AND table_schema NOT IN ('information_schema')""",
+
+    'get_table_schema': lambda table_name: f"""SELECT
+    cols.column_name AS name,
+    cols.data_type AS type,
+    cols.is_nullable,
+    cols.comment AS column_description,
+    CASE
+        WHEN tc.constraint_type = 'PRIMARY KEY' THEN 'PRIMARY KEY'
+        WHEN tc.constraint_type = 'FOREIGN KEY' THEN 'FOREIGN KEY'
+        ELSE NULL
+    END AS key_type,
+    ccu.table_name AS foreign_table,
+    ccu.column_name AS foreign_column
+FROM information_schema.columns AS cols
+LEFT JOIN information_schema.key_column_usage AS kcu
+    ON cols.table_schema = kcu.table_schema
+    AND cols.table_name = kcu.table_name
+    AND cols.column_name = kcu.column_name
+LEFT JOIN information_schema.table_constraints AS tc
+    ON kcu.constraint_name = tc.constraint_name
+    AND kcu.table_schema = tc.table_schema
+LEFT JOIN information_schema.referential_constraints AS rc
+    ON tc.constraint_name = rc.constraint_name
+    AND tc.table_schema = rc.constraint_schema
+LEFT JOIN information_schema.constraint_column_usage AS ccu
+    ON rc.unique_constraint_name = ccu.constraint_name
+    AND rc.unique_constraint_schema = ccu.constraint_schema
+WHERE concat_ws('.', cols.table_schema, cols.table_name) = '{table_name}'
+ORDER BY cols.ordinal_position;""",
+
+    'get_table_rows': lambda table_name: f"SELECT * FROM {table_name} LIMIT 3",
+
+    'get_column_values': lambda table_name, column_name: f"""
+SELECT DISTINCT
+    `{column_name}`
+FROM {table_name}
+ORDER BY `{column_name}`
+LIMIT 10"""
+}
+
 # Function to get the appropriate query based on database type and query name
 def get_query(db_type: str, query_name: str, **kwargs) -> str:
     if db_type == 'AZURE_SQL':
@@ -159,6 +204,8 @@ def get_query(db_type: str, query_name: str, **kwargs) -> str:
         queries = POSTGRESQL_QUERIES
     elif db_type == 'SNOWFLAKE':
         queries = SNOWFLAKE_QUERIES
+    elif db_type == 'DATABRICKS':
+        queries = DATABRICKS_QUERIES
     else:
         raise ValueError(f"Unsupported database type: {db_type}")
 

@@ -1,0 +1,7 @@
+fastmcp
+python-dotenv
+requests
+azure-identity
+pyodbc
+psycopg2-binary
+snowflake-connector-python

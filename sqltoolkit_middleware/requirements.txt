@@ -1,0 +1,7 @@
+azure-functions
+azure-identity
+pandas
+pyodbc
+psycopg2-binary
+requests
+snowflake-connector-python

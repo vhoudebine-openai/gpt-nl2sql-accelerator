@@ -1,166 +1,94 @@
-# azure-nl2sql-accelerator
-Accelerator to interact with database in natural language using Azure OpenAI models.
+# gpt-nl2sql-accelerator
 
-This repository demonstrates a robust implementation of NL2SQL that injects rich table metadata into the LLM prompt through RAG to help improve SQL query generation.
+An accelerator for building natural-language-to-SQL agents powered by OpenAI
+products—whether you are integrating through the ChatGPT UI, the Agents SDK, Responses API. The project packages everything needed to harvest
+database context, reason about schemas, and safely execute read-only SQL across
+multiple providers.
 
-This approach is different from traditional Agentic approaches that rely on just-in-time database exploration to generate SQL queries.
+## Key Components
 
-The process consists of two parts:
-- **Offline**: Generate rich metadata about the database tables (column names, description, sample values, column type etc) and store these in a vector database (Azure AI Search)
-- **Online**: When a question is asked, only the metadata for the most relevant tables based on the question is retrieved from the vector store and fed to the LLM to improve query accuracy.
+- **sqltoolkit** – Python library that connects to Azure SQL, PostgreSQL,
+  Snowflake, Databricks (via REST), and generic ODBC sources. It extracts table
+  metadata, samples rows, generates natural-language descriptions, and runs
+  queries through a common `DatabaseClient`.
+- **sqltoolkit_middleware** – Azure Functions app that exposes sqltoolkit
+  operations over HTTP for ChatGPT or other web-centric agents. Responses are
+  returned as JSON for small result sets and streamed as downloadable CSV files
+  whenever a query returns more than 10 rows.
+- **sqltoolkit_mcp** – A FastMCP server that reuses sqltoolkit connectors so MCP
+  hosts (such as OpenAI’s desktop client) can list tables, inspect schemas, run
+  queries, and fetch distinct column values.
+- **notebooks** – Quickstart notebooks demonstrating how to index new databases
+  and experiment with generated SQL.
 
+## Database Indexing Workflow
 
-![Architecture Diagram](static/diagram.png)
+1. **Connect** – Instantiate the appropriate connector (AzureSQLConnector,
+   PostgreSQLConnector, SnowflakeConnector, DatabricksConnector, or OdbcConnector)
+   and wrap it with `DatabaseClient`.
+2. **Profile tables** – Use `DatabaseIndexer` to enumerate tables, capture column
+   metadata, sample key values, and capture row-level examples.
+3. **Enrich with language** – Call the built-in prompt templates to create
+   human-friendly descriptions that improve grounding for downstream LLM calls.
+4. **Embed and store** – Generate embeddings (e.g., `text-embedding-3-small`) and
+   push the table manifests to your vector store. The included helpers target
+   Azure AI Search, but the exported manifest can seed any retrieval system.
+5. **Serve at query time** – When the agent receives a natural-language question,
+   retrieve the top table manifests, assemble a SQL-focused prompt, and use
+   sqltoolkit (or the middleware/MCP layers) to validate and execute the SQL.
 
-**This respository has 4 main components:**
-- the `sqltoolkit` library has utilities for offline metadata generation from a database ([sqltoolkit](sqltoolkit))
-- A backend app exposing API endpoints to index the data and generate SQL ([backend](backend))
-- A Sample front end streamlit app for demo purposes ([frontend](frontend))
-- Quickstart notebooks for interactive testing: 
-    - [quickstart_azure_sql_.ipynb](./notebooks/quickstart_azure_sql_.ipynb)
-    - [quickstart_postgres.ipynb](./notebooks/quickstart_postgres.ipynb)
-    - [quickstart_snowflake.ipynb](./notebooks/quickstart_snowflake.ipynb)
+This separation keeps heavy metadata collection offline while the online path
+stays fast and focused on query execution.
 
-## Pre-requisites
-The repository currently supports Azure SQL and PostgreSQL connections, with more coming.
+## Middleware Options
 
-- An Azure OpenAI resource with a gpt-4o, gpt-4o-mini and text-embedding-3-small deployment
-- An Azure AI Search resource
-- the odbc drivers for the databases should be installed and set-up in the environment running the code
+- **ChatGPT / Web Agents** – Deploy `sqltoolkit_middleware` to Azure Functions,
+  configure the `SQL_CONNECTOR_CONFIG` environment variable with your connector
+  settings, and call the `/api/sql/query` endpoint. JSON results are returned
+  when <= 10 rows; otherwise the middleware streams a CSV attachment with an
+  `X-Row-Count` header so ChatGPT can expose it as a downloadable file.
+- **MCP Hosts** – Run `python sqltoolkit_mcp/server.py` (after installing
+  `sqltoolkit_mcp/requirements.txt` and `pip install -e .`). MCP clients can
+  discover tools such as `list_tables`, `table_schema`, `query_sql`, and
+  `column_values`, making the same connectors available inside desktop agents.
 
-## Sqltoolkit
-`sqltoolkit` is a Python library for interacting with SQL databases, providing tools for connecting to databases, executing queries, and indexing data for Azure AI Search.
+## Installation
 
-### Features
-
-- Connect to Azure SQL, PostgreSQL, and other ODBC-compatible databases.
-- Execute SQL queries and retrieve results.
-- Extract schema and sample data from database tables.
-- Generate AI-based descriptions for tables and columns.
-- Integrate with Azure AI Search.
-
-### Installation
-
-```sh
+```bash
 pip install -r requirements.txt
 ```
 
-### Usage
+For component-specific dependencies:
 
-#### Connecting to a Database
+- `pip install -r sqltoolkit_middleware/requirements.txt && pip install -e .`
+  to run the Azure Functions middleware locally.
+- `pip install -r sqltoolkit_mcp/requirements.txt && pip install -e .` to host
+  the MCP server.
+
+## Basic Usage
 
 ```python
-from sqltoolkit.connectors import AzureSQLConnector, PostgreSQLConnector, SnowflakeConnector
+from sqltoolkit.connectors import AzureSQLConnector, DatabricksConnector
 from sqltoolkit.client import DatabaseClient
 
-# Azure SQL Connection using entra ID
-azure_connector = AzureSQLConnector(server='your_server', database='your_database')
+# Azure SQL via Entra ID
+azure_connector = AzureSQLConnector(server="your-server.database.windows.net", database="your_db")
 sql_client = DatabaseClient(azure_connector)
 
-# Azure SQL Connection using password
-azure_connector = AzureSQLConnector(server='your_server', database='your_database', use_entra_id=False, user='your_user', password='your_password')
-sql_client = DatabaseClient(azure_connector)
-
-# PostgreSQL Connection
-postgres_connector = PostgreSQLConnector(host='your_host', database='your_database', user='your_user', password='your_password')
-sql_client = DatabaseClient(postgres_connector)
-
-# SnowflakeSQL Connection
-snowflake_connector = SnowflakeConnector(
-    user='your_user', password='your_password', account='your_account',
-    warehouse='your_warehouse', database='your_database', schema='your_schema'
+# Databricks via REST API
+dbx_connector = DatabricksConnector(
+    host="https://adb-<workspace>.azuredatabricks.net",
+    token="<personal-access-token>",
+    warehouse_id="<sql-warehouse-id>",
+    catalog="main",
+    schema="sales",
 )
-sql_client = DatabaseClient(snowflake_connector)
+dbx_client = DatabaseClient(dbx_connector)
+
+print(sql_client.list_database_tables())
+print(dbx_client.query("SELECT * FROM sales.orders LIMIT 5"))
 ```
 
-#### Executing Queries
-
-```python
-# List database tables
-tables = sql_client.list_database_tables()
-print(tables)
-
-# Execute a custom query
-query_result = sql_client.query("SELECT * FROM your_table LIMIT 10")
-print(query_result)
-```
-
-#### Indexing Data for Azure AI Search
-
-```python
-from sqltoolkit.indexer import DatabaseIndexer
-from azure.identity import DefaultAzureCredential
-
-# Initialize the indexer
-indexer = DatabaseIndexer(client=sql_client, openai_client=openai_client, aoai_deployment='your_deployment', embedding="text-embedding-3-small")
-
-# Fetch and describe tables
-table_manifests = indexer.fetch_and_describe_tables()
-
-# Generate table embeddings
-indexer.generate_table_embeddings()
-
-# Export JSON manifest
-json_manifest = indexer.export_json_manifest()
-with open('tables_manifest.json', 'w') as f:
-    f.write(json_manifest)
-
-# Create Azure AI Search index
-indexer.create_azure_ai_search_index(
-    search_endpoint='your_search_endpoint',
-    search_credential='your_search_credential',
-    index_name='your_index_name',
-    openai_endpoint='your_openai_endpoint',
-    openai_key='your_openai_key',
-    embedding_deployment='your_embedding_deployment'
-)
-
-# Push data to Azure AI Search
-indexer.push_to_ai_search()
-```
-
-### Modules
-
-- `connectors.py`: Database connectors for Azure SQL, PostgreSQL, and ODBC-compatible databases.
-- `client.py`: `DatabaseClient` class for executing queries and retrieving results.
-- `entities.py`: `Table` and `TableColumn` classes for representing database table metadata.
-- `indexer.py`: `DatabaseIndexer` class for indexing data and integrating with Azure AI Search.
-- `sql_queries.py`: Predefined SQL queries for different database types.
-- `prompts.py`: Prompts for generating AI-based descriptions for tables and columns.
-
-## Backend
-the backend is written in python fastapi.\
-backend is currently designed to take in all the required information (such as Azure OpenAI Api Keys, Azure AI Search information) instead of loading it from env variables
-
-#### getting started with backend
-
-1. change the directory to backend and install all the requirements
-    ```
-      cd backend
-      pip install -r requirements.txt
-    ```
-2. go to the app directory
-    ```
-        cd app
-    ```
-3. run the fastapi application in dev mode
-    ```
-        fastapi dev main.py
-    ```
-4. to see the api definition, open the browser and move to http://localhost:8000/docs
-
-## Frontend
-you can attach any frontend application to call the backend api\
-on this repo, we will be using streamlit to render a simple single page app.
-
-#### getting started with frontend
-
-1. move to streamlit app directory
-    ```
-        cd frontend/streamlit
-        pip install -r requiements.txt
-    ```
-2. run the streamlit app
-    ```
-        streamlit run main.py
-    ```
+Use `sqltoolkit.indexer.DatabaseIndexer` to collect and embed metadata, then wire
+the middleware or MCP server into your preferred agent runtime to close the loop
+from natural language to validated SQL and back.

@@ -11,6 +11,11 @@ class DatabaseClient:
         self.connector = connector  
         self.connection = self.connector.get_conn()
   
+    def _read_sql(self, query: str) -> pd.DataFrame:
+        if hasattr(self.connection, "run_query"):
+            return self.connection.run_query(query)
+        return pd.read_sql(query, self.connection)
+  
     @staticmethod  
     def convert_datetime_columns_to_string(df: pd.DataFrame) -> pd.DataFrame:  
         for column in df.columns:  
@@ -20,29 +25,29 @@ class DatabaseClient:
   
     def list_database_tables(self) -> str:
         query = sql_queries.get_query(self.connector.type, 'list_database_tables')
-        df = pd.read_sql(query, self.connection)  
+        df = self._read_sql(query)
         return json.dumps(df.to_dict(orient='records'))  
   
     def query(self, query: str) -> str:  
-        df = pd.read_sql(query, self.connection)  
+        df = self._read_sql(query)
         df = self.convert_datetime_columns_to_string(df)  
         return json.dumps(df.to_dict(orient='records'))  
   
     def get_table_schema(self, table_name: str) -> str:  
         query = sql_queries.get_query(self.connector.type, 'get_table_schema', table_name=table_name)
-        df = pd.read_sql(query, self.connection)  
+        df = self._read_sql(query)
         return json.dumps({'Columns':df.to_dict(orient='records')})  
   
     def get_table_rows(self, table_name: str) -> str:  
         query = sql_queries.get_query(self.connector.type, 'get_table_rows', table_name=table_name) 
-        df = pd.read_sql(query, self.connection)  
+        df = self._read_sql(query)
         df = self.convert_datetime_columns_to_string(df)  
         return df.to_markdown()  
   
     def get_column_values(self, table_name: str, column_name: str) -> str:  
         query = sql_queries.get_query(self.connector.type, 'get_column_values', table_name=table_name, column_name=column_name)
         try:  
-            df = pd.read_sql(query, self.connection)  
+            df = self._read_sql(query)
             df = self.convert_datetime_columns_to_string(df)  
             return json.dumps(df.to_dict(orient='records'))
         except Exception as e:
