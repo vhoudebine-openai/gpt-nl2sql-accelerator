@@ -25,10 +25,10 @@ from azure.core.credentials import AzureKeyCredential
 import re
 
 class DatabaseIndexer:
-    def __init__(self, client, openai_client, aoai_deployment, embedding="text-embedding-3-small", extra_context=None):
+    def __init__(self, client, openai_client, model, embedding="text-embedding-3-small", extra_context=None):
         self.client = client
         self.openai_client = openai_client
-        self.aoai_deployment = aoai_deployment
+        self.model = model
         self.embedding = embedding
         self.extra_context = extra_context
         
@@ -64,9 +64,9 @@ class DatabaseIndexer:
             table = Table(name=table_name)
             table.get_columns(self.client)
             table.extract_column_values(self.client)
-            table.extract_llm_column_definitions(self.openai_client, self.aoai_deployment, self.extra_context)
-            table.get_table_description(self.openai_client, self.aoai_deployment, self.extra_context)
-            table.get_table_readable_name(self.openai_client, self.aoai_deployment, self.extra_context)
+            table.extract_llm_column_definitions(self.openai_client, self.model, self.extra_context)
+            table.get_table_description(self.openai_client, self.model, self.extra_context)
+            table.get_table_readable_name(self.openai_client, self.model, self.extra_context)
             table_manifests.append(table)
             self.logger.info(f"Completed processing table: {table_name}")
 
